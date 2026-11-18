@@ -1,0 +1,14 @@
+# dsh-plugin-git-history 的 bundle patch。
+#
+# 只插入一行 Host 行；浏览器半身由 package.json 的 dsh.client 自动带入
+# （dsh-client-modules 扫描"name 是裸包名"的 Host 行，读取该包的 dsh.client）。
+- insert:
+    - id: git-history
+      name: 'dsh-plugin-git-history'
+      config:
+        # 默认仓库。留空则使用 Host 进程的工作目录，并在面板里提示你选择仓库
+        # （选择结果记在浏览器 localStorage，不会写回这里）。
+        # 想固定一个仓库时填绝对路径，例如：'C:/code/my-repo'
+        repo: ''
+        # 打开后在 host-debug.log 记录每次请求与 git 错误（默认只记错误）。
+        debug: false

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Git commit history",
+    "description": "Adds a right-sidebar panel that lists the configured repository's commits with branch, ahead/behind, author, time, graph lanes, and the changed files and patch of each commit.",
+    "detail": "docs/DETAIL.md"
+  }
+}

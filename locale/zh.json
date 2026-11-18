@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Git 提交历史",
+    "description": "在右侧边栏增加一个面板，显示所配置仓库的分支、领先/落后、提交图，以及每个提交的作者、时间、变更文件与 patch。",
+    "detail": "docs/DETAIL.md"
+  }
+}
