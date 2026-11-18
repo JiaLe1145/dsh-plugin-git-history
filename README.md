@@ -3,6 +3,13 @@
 > 兼容性：在 **DeepSeek Harness 0.2.2-rc.3（Windows 桌面版）** 上开发并验证；依赖其
 > `connection.fetch` 与右侧边栏 tab 注册 API。更老的 DSH 版本可能不提供这些接口。
 
+## 下载
+
+- 最新安装包：[Releases](https://github.com/JiaLe1145/dsh-plugin-git-history/releases/latest)
+- 开发/定制：`git clone https://github.com/JiaLe1145/dsh-plugin-git-history.git`，直接把仓库目录当作插件目录安装
+
+欢迎提 Issue 与 PR：<https://github.com/JiaLe1145/dsh-plugin-git-history>
+
 在 DeepSeek Harness 的**右侧边栏**里查看当前仓库的 Git 提交历史，按 IDE 的用法设计：
 
 - 分支、`↑ 领先 / ↓ 落后`、未提交改动数量
