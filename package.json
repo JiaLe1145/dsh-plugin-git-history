@@ -1,6 +1,6 @@
-{
+﻿{
   "name": "dsh-plugin-git-history",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Git commit history panel for the DeepSeek Harness right sidebar: graph lanes, date-ordered commits, refs, and colored per-file diffs.",
   "license": "MIT",

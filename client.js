@@ -43,6 +43,10 @@ window.__ModuleLoader__.load({
       repoPlaceholder: '仓库绝对路径，例如 C:/code/my-repo',
       applyRepo: '应用',
       clearRepo: '清除',
+      repoMustBeAbsolute: '请填写绝对路径，例如 C:/code/my-repo',
+      detectedRepo: '当前会话工作区',
+      workspaceList: '工作区',
+      needRepo: '先在 ⌂ 里选择一个仓库目录',
       mergeCommit: '合并提交 · 相对第一父提交的改动',
     }
     const en = {
@@ -73,6 +77,10 @@ window.__ModuleLoader__.load({
       repoPlaceholder: 'Absolute repository path, e.g. C:/code/my-repo',
       applyRepo: 'Apply',
       clearRepo: 'Clear',
+      repoMustBeAbsolute: 'An absolute path is required, e.g. C:/code/my-repo',
+      detectedRepo: 'Session workspace',
+      workspaceList: 'Workspaces',
+      needRepo: 'Choose a repository folder via ⌂ first',
       mergeCommit: 'Merge commit · changes against the first parent',
     }
 
@@ -140,6 +148,24 @@ window.__ModuleLoader__.load({
     function withRepo(url, repo) {
       if (!repo) return url
       return url + (url.includes('?') ? '&' : '?') + 'repo=' + encodeURIComponent(repo)
+    }
+
+    /** 客户端先挡一次非绝对路径，避免每次都打到宿主再返回错误。 */
+    function absolutePath(value) {
+      const trimmed = String(value || '')
+        .trim()
+        .replace(/^["'`]+|["'`]+$/g, '')
+      if (!trimmed) return ''
+      if (
+        /^[a-zA-Z]:[\\/]/.test(trimmed) ||
+        trimmed.startsWith('\\\\') ||
+        trimmed.startsWith('/') ||
+        trimmed.startsWith('~/') ||
+        trimmed.startsWith('~\\')
+      ) {
+        return trimmed
+      }
+      return ''
     }
 
     function laneColor(lane) {
@@ -931,6 +957,11 @@ window.__ModuleLoader__.load({
       const [repoDraft, setRepoDraft] = useState(() => readStored(REPO_KEY))
       const [recent, setRecent] = useState(() => readRecent())
       const [editingRepo, setEditingRepo] = useState(false)
+      const [repoError, setRepoError] = useState('')
+      const [suggestions, setSuggestions] = useState([])
+      const [usingDetected, setUsingDetected] = useState(false)
+      const [ready, setReady] = useState(false)
+      const sessionId = props.sessionId || ''
       const autoOpenedRepo = useRef(false)
       const abortRef = useRef(null)
       const searchRef = useRef(null)
@@ -938,6 +969,10 @@ window.__ModuleLoader__.load({
       const listRef = useRef(null)
 
       const refresh = useCallback(async () => {
+        if (!repo) {
+          setLoading(false)
+          return
+        }
         if (abortRef.current) abortRef.current.abort()
         const controller = new AbortController()
         abortRef.current = controller
@@ -957,12 +992,47 @@ window.__ModuleLoader__.load({
         }
       }, [limit, repo])
 
+      // 打开面板先问宿主：当前会话属于哪个工作区、哪些工作区是 git 仓库。
       useEffect(() => {
-        if (visible) refresh()
+        let cancelled = false
+        const query = sessionId ? '?session=' + encodeURIComponent(sessionId) : ''
+        // 旧版本可能把非法输入存进了 localStorage，这里清掉，避免一直报错。
+        const storedRaw = readStored(REPO_KEY)
+        const stored = absolutePath(storedRaw)
+        if (storedRaw && !stored) {
+          writeStored(REPO_KEY, '')
+          setRepo('')
+          setRepoDraft('')
+        }
+        fetchJson('api/git-history.defaults' + query)
+          .then((data) => {
+            if (cancelled) return
+            setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : [])
+            if (!stored) {
+              if (data.detected) {
+                setRepo(data.detected)
+                setRepoDraft(data.detected)
+                setUsingDetected(true)
+              } else {
+                setEditingRepo(true)
+              }
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (!cancelled) setReady(true)
+          })
+        return () => {
+          cancelled = true
+        }
+      }, [sessionId])
+
+      useEffect(() => {
+        if (visible && ready && repo) refresh()
         return () => {
           if (abortRef.current) abortRef.current.abort()
         }
-      }, [visible, refresh])
+      }, [visible, ready, repo, refresh])
 
       // 严格按日期倒序：git 的默认顺序（含 --graph）会为了保持泳道连续而把旧提交排到新提交上面。
       const sortedCommits = useMemo(() => {
@@ -997,24 +1067,40 @@ window.__ModuleLoader__.load({
       const onBack = useCallback(() => setSelected(null), [])
 
       const applyRepo = useCallback(() => {
-        const value = repoDraft.trim()
+        const value = absolutePath(repoDraft)
+        if (!value) {
+          setRepoError(tr('repoMustBeAbsolute'))
+          return
+        }
+        setRepoError('')
         writeStored(REPO_KEY, value)
         setRepo(value)
         setRecent(rememberRepo(value))
         setEditingRepo(false)
         setSelected(null)
+        setUsingDetected(false)
         autoOpenedRepo.current = true
-      }, [repoDraft])
+      }, [repoDraft, tr])
 
-      const pickRepo = useCallback((value) => {
-        setRepoDraft(value)
-        writeStored(REPO_KEY, value)
-        setRepo(value)
-        setRecent(rememberRepo(value))
-        setEditingRepo(false)
-        setSelected(null)
-        autoOpenedRepo.current = true
-      }, [])
+      const pickRepo = useCallback(
+        (value) => {
+          const next = absolutePath(value)
+          if (!next) {
+            setRepoError(tr('repoMustBeAbsolute'))
+            return
+          }
+          setRepoError('')
+          setRepoDraft(next)
+          writeStored(REPO_KEY, next)
+          setRepo(next)
+          setRecent(rememberRepo(next))
+          setEditingRepo(false)
+          setSelected(null)
+          setUsingDetected(false)
+          autoOpenedRepo.current = true
+        },
+        [tr]
+      )
 
       const clearRepo = useCallback(() => {
         writeStored(REPO_KEY, '')
@@ -1022,10 +1108,12 @@ window.__ModuleLoader__.load({
         setRepo('')
         setRecent(readRecent())
         setSelected(null)
+        setRepoError('')
+        setUsingDetected(false)
       }, [])
 
       useEffect(() => {
-        if (error && /not a git repository/i.test(error) && !autoOpenedRepo.current) {
+        if (error && /not a git repository|must be absolute/i.test(error) && !autoOpenedRepo.current) {
           autoOpenedRepo.current = true
           setEditingRepo(true)
         }
@@ -1129,6 +1217,7 @@ window.__ModuleLoader__.load({
             : log && log.branch
               ? h(Chip, { accent: true, title: log.branch }, log.branch)
               : null,
+          usingDetected && repo ? h(Chip, { title: repo }, tr('detectedRepo')) : null,
           log && log.ahead ? h(Chip, { title: tr('ahead') }, '↑' + log.ahead) : null,
           log && log.behind ? h(Chip, { title: tr('behind') }, '↓' + log.behind) : null,
           log && log.dirty ? h(Chip, { title: tr('dirty') }, '● ' + log.dirty) : null,
@@ -1191,6 +1280,38 @@ window.__ModuleLoader__.load({
                 h(Button, { onClick: applyRepo }, tr('applyRepo')),
                 h(Button, { onClick: clearRepo, title: tr('clearRepo') }, tr('clearRepo'))
               ),
+              repoError ? h('div', { style: { fontSize: 11, color: C.del } }, repoError) : null,
+              suggestions.length
+                ? h(
+                    'div',
+                    { style: { display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' } },
+                    h('span', { style: { fontSize: 10, color: C.muted } }, tr('workspaceList')),
+                    suggestions.map((item) =>
+                      h(
+                        'button',
+                        {
+                          key: item.path,
+                          type: 'button',
+                          onClick: () => pickRepo(item.path),
+                          title: item.path,
+                          style: {
+                            appearance: 'none',
+                            cursor: 'pointer',
+                            background: 'transparent',
+                            border: '1px solid ' + C.accent,
+                            color: C.accent,
+                            borderRadius: 4,
+                            fontSize: 10,
+                            lineHeight: '16px',
+                            padding: '0 5px',
+                            fontFamily: 'inherit',
+                          },
+                        },
+                        item.title || item.path
+                      )
+                    )
+                  )
+                : null,
               recent.length
                 ? h(
                     'div',
@@ -1254,8 +1375,11 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { ref: listRef, tabIndex: -1, style: { flex: 1, minHeight: 0, overflow: 'auto', outline: 'none' } },
-                loading && h('div', { style: { padding: '10px 8px', color: C.muted } }, tr('loading')),
-                !loading && error
+                !repo && ready
+                  ? h('div', { style: { padding: '10px 8px', color: C.muted } }, tr('needRepo'))
+                  : null,
+                repo && loading && h('div', { style: { padding: '10px 8px', color: C.muted } }, tr('loading')),
+                repo && !loading && error
                   ? h(
                       'div',
                       { style: { padding: '10px 8px' } },
@@ -1264,10 +1388,10 @@ window.__ModuleLoader__.load({
                       h(Button, { onClick: refresh }, tr('retry'))
                     )
                   : null,
-                !loading && !error && commits.length === 0
+                repo && !loading && !error && commits.length === 0
                   ? h('div', { style: { padding: '10px 8px', color: C.muted } }, log && log.commits ? tr('empty') : '')
                   : null,
-                !loading && !error
+                repo && !loading && !error
                   ? (() => {
                       const out = []
                       let lastDay = ''

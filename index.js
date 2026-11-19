@@ -8,14 +8,19 @@
 // 不写仓库、不 fetch、不执行 hooks（GIT_OPTIONAL_LOCKS=0 / GIT_TERMINAL_PROMPT=0）。
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { appendFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import path from 'node:path'
 
 const execFileAsync = promisify(execFile)
 const MAX_PATCH_CHARS = 240_000
 const MAX_BUFFER = 32 * 1024 * 1024
 const MAX_DEBUG_BYTES = 512 * 1024
+
+// DSH 的工作区清单：用它把「当前会话」映射到仓库目录，面板打开时就能自动选中。
+const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+const WORKSPACE_STORE = path.join(DSH_HOME, 'storages', 'workspace.json')
 
 // 诊断日志：宿主代码改动需要重启 DSH 才生效，出问题时看这个文件能少一轮猜测。
 const DEBUG_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'host-debug.log')
@@ -120,14 +125,56 @@ function parseLog(text) {
 
 export const inject = ['connection']
 
-/** 解析请求里的 repo 参数；必须是绝对路径，否则退回插件配置的默认仓库。 */
+/** 解析请求里的 repo 参数；做常见输入容错后再要求绝对路径。 */
 function requestRepo(raw, fallback) {
   if (raw == null || String(raw).trim() === '') return fallback
-  const value = String(raw).trim()
+  let value = String(raw).trim()
+  // 去掉复制路径时带上的引号/反引号
+  value = value.replace(/^["'`]+|["'`]+$/g, '').trim()
+  // 接受 file:///C:/... 形式
+  if (/^file:\/\//i.test(value)) {
+    try {
+      value = fileURLToPath(value)
+    } catch {
+      // 保持原值，交给下面的绝对路径判断报错
+    }
+  }
+  // 展开 ~
+  if (value === '~' || value.startsWith('~/') || value.startsWith('~\\')) {
+    value = path.join(os.homedir(), value.slice(1))
+  }
   if (!path.isAbsolute(value)) {
-    throw new Error('The repository path must be absolute.')
+    throw new Error(`The repository path must be absolute (received: ${String(raw).slice(0, 200)})`)
   }
   return path.resolve(value)
+}
+
+/** 读取 DSH 的工作区清单（失败时返回空数组，不影响插件）。 */
+function readWorkspaces() {
+  try {
+    const data = JSON.parse(readFileSync(WORKSPACE_STORE, 'utf8'))
+    const table = data && data.tables && data.tables.workspaces
+    if (!table) return []
+    return Object.entries(table).map(([id, workspace]) => ({
+      id,
+      path: workspace.path || '',
+      title: workspace.title || workspace.path || '',
+      sessionIds: Array.isArray(workspace.sessionIds) ? workspace.sessionIds : [],
+      updatedAt: workspace.updatedAt || '',
+    }))
+  } catch {
+    return []
+  }
+}
+
+async function isGitRepo(dir) {
+  if (!dir) return false
+  try {
+    const out = await git(dir, ['rev-parse', '--is-inside-work-tree'], 3000)
+    return out.trim() === 'true'
+  } catch {
+    return false
+  }
 }
 
 /** 校验目录确实在某个 git 工作树内，并给出可读的错误。 */
@@ -159,6 +206,33 @@ export function apply(ctx, config) {
 
   const LOG_FORMAT = '%x1e%H%x1f%h%x1f%an%x1f%ad%x1f%D%x1f%s%x1f%P'
   const SHOW_FORMAT = '%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%cn%x1f%cd%x1f%D%x1f%s%x1f%b'
+
+  // 面板打开时先问这里：按会话找到所属工作区仓库，并列出可选工作区。
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: '/api/git-history.defaults',
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      try {
+        trace(`defaults request ${request.url}`)
+        const url = new URL(request.url)
+        const session = String(url.searchParams.get('session') || '')
+        const workspaces = readWorkspaces()
+        const match = session ? workspaces.find((item) => item.sessionIds.includes(session)) : null
+        const checks = await Promise.all(
+          workspaces.map(async (item) => ({ ...item, isGit: await isGitRepo(item.path) }))
+        )
+        const suggestions = checks
+          .filter((item) => item.isGit)
+          .map((item) => ({ path: item.path, title: item.title }))
+        const detected = match && (await isGitRepo(match.path)) ? match.path : ''
+        return json({ ok: true, detected, suggestions })
+      } catch (error) {
+        debug(`defaults error ${error && error.message ? error.message : error}`)
+        return json({ ok: false, error: String((error && error.message) || error) })
+      }
+    },
+  }), 'git-history: defaults route')
 
   ctx.effect(() => ctx.connection.fetch.register({
     path: '/api/git-history.log',
